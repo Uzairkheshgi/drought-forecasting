@@ -22,7 +22,6 @@ TRAIN_PATH = Path(__file__).resolve().parent / "data" / "Train.csv"
 
 N_TRIALS = 15
 FIT_FRAC = 0.2          # the model saturates far below this; keeps trials at ~4s
-TWS_MASK_RATE = 0.665
 TEST_RUN_LENGTHS = [1, 3, 4, 7, 1, 2]
 
 FEATURES = ["TWS_t", "month_sin", "month_cos", "SPEI_01_t", "SPEI_03_t",
@@ -30,19 +29,6 @@ FEATURES = ["TWS_t", "month_sin", "month_cos", "SPEI_01_t", "SPEI_03_t",
 
 NOTEBOOK_DEFAULTS = dict(learning_rate=0.05, max_iter=300, max_depth=8,
                          min_samples_leaf=50, l2_regularization=1.0)
-
-
-def mask_tws(df, rate=TWS_MASK_RATE, seed=0):
-    """Random per-row masking. For fitting only — scoring uses mask_tws_like_test."""
-    out = df.copy().reset_index(drop=True)
-    masked = np.random.RandomState(seed).rand(len(out)) < rate
-    out.loc[masked, "TWS_t"] = np.nan
-    return out
-
-
-def augment_with_masking(df, rate=TWS_MASK_RATE, seed=0):
-    """Original rows plus a masked copy, so the NaN branch gets trained."""
-    return pd.concat([df, mask_tws(df, rate, seed)], ignore_index=True)
 
 
 def assign_run_layout(times, run_lengths=TEST_RUN_LENGTHS):
@@ -145,19 +131,19 @@ train = pd.read_csv(TRAIN_PATH, parse_dates=["time"]).rename(columns={"target": 
 # both sides and leak.
 months = np.sort(train["time"].unique())
 split = int(len(months) * 0.8)
-fit_aug = augment_with_masking(train[train["time"].isin(months[:split])])
+fit_frame = train[train["time"].isin(months[:split])]
 val_masked = add_cell_id(mask_tws_like_test(
     train[train["time"].isin(months[split:])].reset_index(drop=True)))
 
-X_fit_full = fit_aug[FEATURES].to_numpy(dtype=np.float32)
-y_fit_full = fit_aug["Target"].to_numpy(dtype=np.float32)
+X_fit_full = fit_frame[FEATURES].to_numpy(dtype=np.float32)
+y_fit_full = fit_frame["Target"].to_numpy(dtype=np.float32)
 y_val = val_masked["Target"].to_numpy(dtype=np.float32)
 
 sub = np.random.RandomState(42).choice(
     len(X_fit_full), int(FIT_FRAC * len(X_fit_full)), replace=False)
 X_fit, y_fit = X_fit_full[sub], y_fit_full[sub]
 
-del train, fit_aug          # ~2 GB of DataFrames; the float32 arrays are ~124 MB
+del train, fit_frame        # frees ~1 GB; the float32 arrays are ~62 MB
 gc.collect()
 
 print(f"fit {X_fit.shape} of {len(X_fit_full):,} | val {len(val_masked):,}")
